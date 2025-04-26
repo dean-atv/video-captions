@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# batch_update_captions.sh
+# Batch delete old captions tracks and upload edited .vtt files using videos.csv
+
+# ─── CONFIGURE YOUR MUX CREDENTIALS ────────────────────────────────────
+export MUX_TOKEN_ID="61acf3ae-837f-4b67-864f-347395bd5894"
+export MUX_TOKEN_SECRET="41sdLF4mmwVSxILI2ta6Dqeg5zqofJCet89h1UaHiC3DTiQJGxACXKbEblvtXYHdkErIcCL2nxB"
+
+# ─── CSV INPUT ──────────────────────────────────────────────────────────
+# Ensure a file named "videos.csv" exists in the same directory,
+# with columns: vtt_file,mux_video_id,mux_track_id (including header row).
+INPUT_CSV="videos.csv"
+
+# ─── BATCH PROCESS LOOP ─────────────────────────────────────────────────
+while IFS=',' read -r VTT_FILE MUX_VIDEO_ID MUX_TRACK_ID; do
+  # Skip header or empty lines
+  if [[ "$VTT_FILE" == "vtt_file" ]] || [[ -z "$VTT_FILE" ]]; then
+    continue
+  fi
+
+  echo "Processing video $MUX_VIDEO_ID, old track $MUX_TRACK_ID..."
+
+  # Delete the existing captions/subtitles track
+  curl -s -u "$MUX_TOKEN_ID:$MUX_TOKEN_SECRET" \
+       -X DELETE \
+       "https://api.mux.com/video/v1/assets/$MUX_VIDEO_ID/tracks/$MUX_TRACK_ID" \
+    && echo "  • Deleted old track $MUX_TRACK_ID" \
+    || echo "  ⚠️  Failed to delete track $MUX_TRACK_ID"
+
+  # Upload the edited .vtt as a new subtitles track
+  curl -s -u "$MUX_TOKEN_ID:$MUX_TOKEN_SECRET" \
+       -X POST "https://api.mux.com/video/v1/assets/$MUX_VIDEO_ID/tracks" \
+       -H "Content-Type: application/json" \
+       -d '{
+         "url":"'"$VTT_FILE"'",
+         "type":"text",
+         "text_type":"subtitles",
+         "closed_captions":true,
+         "language_code":"en",
+         "name":"English (Edited)"
+       }' \
+    && echo "  • Uploaded new subtitles from $VTT_FILE" \
+    || echo "  ⚠️  Failed to upload subtitles for $MUX_VIDEO_ID"
+
+  echo ""
+done < "$INPUT_CSV"
+
+# ─── USAGE ──────────────────────────────────────────────────────────────
+# 1. Place this script and "videos.csv" in the same folder.
+# 2. Make executable: chmod +x batch_update_captions.sh
+# 3. Run: ./batch_update_captions.sh

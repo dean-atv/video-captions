@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# mux_update_workflow.sh
+# 1) Convert playback IDs to asset IDs, then batch delete/upload captions
+# 2) Requires: videos.csv with columns vtt_file,mux_video_id,mux_track_id
+# 3) Uses jq (install via "brew install jq")
+
+# ─── CONFIGURE YOUR MUX CREDENTIALS ──────────────────────────────
+export MUX_TOKEN_ID="61acf3ae-837f-4b67-864f-347395bd5894"
+export MUX_TOKEN_SECRET="41sdLF4mmwVSxILI2ta6Dqeg5zqofJCet89h1UaHiC3DTiQJGxACXKbEblvtXYHdkErIcCL2nxB"
+
+# ─── FILE NAMES ──────────────────────────────────────────────────
+ORIG_CSV="videos.csv"
+ASSET_CSV="videos_with_asset_ids.csv"
+
+# Check for required files
+if [[ ! -f "$ORIG_CSV" ]]; then
+  echo "❌ $ORIG_CSV not found. Please place it here and retry."
+  exit 1
+fi
+
+# ─── STEP 1: Convert playback IDs to asset IDs ────────────────────
+echo "🔄 Converting playback IDs to asset IDs..."
+# Skip header, output new CSV with header
+(echo "vtt_file,asset_id,mux_track_id" && tail -n +2 "$ORIG_CSV" | \
+  while IFS=',' read -r VTT PLAYBACK TRACK; do
+    ASSET=$(curl -s -u "$MUX_TOKEN_ID:$MUX_TOKEN_SECRET" \
+      "https://api.mux.com/video/v1/playback-ids/$PLAYBACK/asset" \
+      | jq -r '.data.object.id')
+    echo "$VTT,$ASSET,$TRACK"
+  done) > "$ASSET_CSV"
+
+echo "✅ Created $ASSET_CSV with asset IDs."
+
+# ─── STEP 2: Batch update captions ───────────────────────────────
+echo "🔄 Starting batch update of captions based on $ASSET_CSV..."
+while IFS=',' read -r VTT_FILE ASSET_ID TRACK_ID; do
+  # Skip header
+  if [[ "$VTT_FILE" == "vtt_file" ]]; then
+    continue
+  fi
+
+  echo "• Processing asset $ASSET_ID (old track $TRACK_ID)"
+
+  # Delete
+  curl -s -u "$MUX_TOKEN_ID:$MUX_TOKEN_SECRET" \
+       -X DELETE \
+       "https://api.mux.com/video/v1/assets/$ASSET_ID/tracks/$TRACK_ID" \
+    && echo "  → Deleted track $TRACK_ID" \
+    || echo "  ⚠️ Failed delete $TRACK_ID"
+
+  # Upload
+  curl -s -u "$MUX_TOKEN_ID:$MUX_TOKEN_SECRET" \
+       -X POST "https://api.mux.com/video/v1/assets/$ASSET_ID/tracks" \
+       -H "Content-Type: application/json" \
+       -d '{
+         "url":"'"$VTT_FILE"'",
+         "type":"text",
+         "text_type":"subtitles",
+         "closed_captions":true,
+         "language_code":"en",
+         "name":"English (Edited)"
+       }' \
+    && echo "  → Uploaded new subtitles from $VTT_FILE" \
+    || echo "  ⚠️ Failed upload for $ASSET_ID"
+
+  echo ""
+done < "$ASSET_CSV"
+
+echo "✅ Batch update complete."
